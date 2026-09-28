@@ -20,7 +20,7 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
   final DatabaseReference _booksDbRef = FirebaseDatabase.instance.ref().child('books');
   late DatabaseReference _aiChatDbRef;
 
-  static const String _apiKey = String.fromEnvironment('GEMINI_API_KEY');
+  static const String _apiKey =  'AQ.Ab8RN6KKBzTtPUMC9J4Jc-X9K1R5xB4ON0JTQH27JjSYhYtypQ';
 
   // Strictly active models list
   final List<String> _models = [
