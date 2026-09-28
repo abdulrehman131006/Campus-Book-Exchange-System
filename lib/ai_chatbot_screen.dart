@@ -20,8 +20,7 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
   final DatabaseReference _booksDbRef = FirebaseDatabase.instance.ref().child('books');
   late DatabaseReference _aiChatDbRef;
 
-  // AAPKI GEMINI API KEY
-  static const String _apiKey = 'AQ.Ab8RN6KKBzTtPUMC9J4Jc-X9K1R5xB4ON0JTQH27JjSYhYtypQ';
+  static const String _apiKey = String.fromEnvironment('GEMINI_API_KEY');
 
   // Strictly active models list
   final List<String> _models = [
@@ -182,44 +181,46 @@ STRICT INSTRUCTIONS:
     String aiReply = '';
     String fullPrompt = "$systemInstruction\n\nUser Question: $text";
 
-    // Attempt API calls with active models
-    for (String model in _models) {
-      for (int attempt = 0; attempt < 2; attempt++) { // Retry loop for 503 errors
-        try {
-          final url = Uri.parse(
-              'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$_apiKey');
+    // Attempt API calls with active models when a key is configured.
+    if (_apiKey.isNotEmpty) {
+      for (String model in _models) {
+        for (int attempt = 0; attempt < 2; attempt++) { // Retry loop for 503 errors
+          try {
+            final url = Uri.parse(
+                'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$_apiKey');
 
-          final body = jsonEncode({
-            "contents": [
-              {
-                "parts": [
-                  {"text": fullPrompt}
+            final body = jsonEncode({
+              "contents": [
+                {
+                  "parts": [
+                    {"text": fullPrompt}
+                  ]
                 ]
+              ]
+            });
+
+            final response = await http.post(
+              url,
+              headers: {'Content-Type': 'application/json'},
+              body: body,
+            );
+
+            if (response.statusCode == 200) {
+              final data = jsonDecode(response.body);
+              aiReply = data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+              if (aiReply.isNotEmpty) {
+                success = true;
+                break;
               }
-            ]
-          });
-
-          final response = await http.post(
-            url,
-            headers: {'Content-Type': 'application/json'},
-            body: body,
-          );
-
-          if (response.statusCode == 200) {
-            final data = jsonDecode(response.body);
-            aiReply = data['candidates'][0]['content']['parts'][0]['text'] ?? '';
-            if (aiReply.isNotEmpty) {
-              success = true;
-              break;
+            } else if (response.statusCode == 503) {
+              await Future.delayed(const Duration(milliseconds: 800)); // Small wait on high demand
             }
-          } else if (response.statusCode == 503) {
-            await Future.delayed(const Duration(milliseconds: 800)); // Small wait on high demand
+          } catch (e) {
+            // Ignore and continue
           }
         } catch (e) {
-          // Ignore and continue
-        }
+        if (success) break;
       }
-      if (success) break;
     }
 
     // Use intelligent fallback if API endpoints are busy
