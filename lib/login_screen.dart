@@ -194,7 +194,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         keyboardType: TextInputType.emailAddress,
                         style: const TextStyle(fontSize: 14),
                         decoration: InputDecoration(
-                          hintText: 'student@comsats.edu.pk',
+                          hintText: 'abc@gmail.com',
                           hintStyle: TextStyle(color: Colors.grey[400], fontSize: 13),
                           prefixIcon: const Icon(Icons.email_outlined, size: 20, color: brandAccentBlue),
                           filled: true,

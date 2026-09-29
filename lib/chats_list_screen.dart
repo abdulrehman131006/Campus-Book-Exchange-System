@@ -14,108 +14,155 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
 
+  static const Color brandNavy = Color(0xFF0B192C);
+  static const Color brandBlue = Color(0xFF1E3E62);
+  static const Color brandAccent = Color(0xFF0077B6);
+
   @override
   Widget build(BuildContext context) {
-    const navyBlue = Color(0xFF002147);
     String currentUserId = _auth.currentUser?.uid ?? '';
 
     return Scaffold(
-      body: StreamBuilder(
-        stream: _dbRef.child('chats').onValue,
-        builder: (context, AsyncSnapshot<DatabaseEvent> snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
+      body: Stack(
+        children: [
+          // Background Decor
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFFE2E8F0), Color(0xFFEDF2F7), Color(0xFFCBD5E1)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+          ),
+          Positioned(
+            top: -30,
+            right: -30,
+            child: Container(
+              width: 180,
+              height: 180,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: brandAccent.withOpacity(0.18),
+              ),
+            ),
+          ),
 
-          if (!snapshot.hasData || snapshot.data?.snapshot.value == null) {
-            return const Center(
-              child: Text('No conversations yet.', style: TextStyle(color: Colors.grey)),
-            );
-          }
+          StreamBuilder(
+            stream: _dbRef.child('chats').onValue,
+            builder: (context, AsyncSnapshot<DatabaseEvent> snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator(color: brandNavy));
+              }
 
-          Map<dynamic, dynamic> map = snapshot.data!.snapshot.value as Map<dynamic, dynamic>;
-          List<Map<String, dynamic>> myChats = [];
-
-          map.forEach((roomId, roomData) {
-            if (roomId.toString().contains(currentUserId) && roomData['meta'] != null) {
-              var meta = roomData['meta'];
-              myChats.add({
-                'roomId': roomId,
-                'bookTitle': meta['bookTitle'] ?? 'Book',
-                'bookId': meta['bookId'] ?? '',
-                'user1_id': meta['user1_id'],
-                'user1_name': meta['user1_name'] ?? 'User',
-                'user2_id': meta['user2_id'],
-                'user2_name': meta['user2_name'] ?? 'User',
-                'lastMessage': meta['lastMessage'] ?? '',
-                'lastTimestamp': meta['lastTimestamp'] ?? 0,
-              });
-            }
-          });
-
-          if (myChats.isEmpty) {
-            return const Center(
-              child: Text('No active chats found.', style: TextStyle(color: Colors.grey)),
-            );
-          }
-
-          // Sort chats by latest message
-          myChats.sort((a, b) => (b['lastTimestamp'] as int).compareTo(a['lastTimestamp'] as int));
-
-          return ListView.builder(
-            itemCount: myChats.length,
-            itemBuilder: (context, index) {
-              var chat = myChats[index];
-
-              bool isUser1 = chat['user1_id'] == currentUserId;
-              String otherUserName = isUser1 ? chat['user2_name'] : chat['user1_name'];
-              String otherUserId = isUser1 ? chat['user2_id'] : chat['user1_id'];
-
-              return Card(
-                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                child: ListTile(
-                  leading: const CircleAvatar(
-                    backgroundColor: navyBlue,
-                    child: Icon(Icons.person, color: Colors.white, size: 22),
-                  ),
-                  title: Text(
-                    otherUserName,
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: navyBlue),
-                  ),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+              if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Text(
-                        'Book: ${chat['bookTitle']}',
-                        style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.black87, fontSize: 13),
-                      ),
-                      Text(
-                        chat['lastMessage'],
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.grey, fontSize: 12),
-                      ),
+                      Icon(Icons.forum_outlined, size: 64, color: Colors.grey[500]),
+                      const SizedBox(height: 10),
+                      Text('No chat conversations yet.', style: TextStyle(color: Colors.grey[700])),
                     ],
                   ),
-                  trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ChatScreen(
-                          sellerId: otherUserId,
-                          bookTitle: chat['bookTitle'],
-                          bookId: chat['bookId'],
+                );
+              }
+
+              Map<dynamic, dynamic> map = snapshot.data!.snapshot.value as Map<dynamic, dynamic>;
+              List<Map<String, String>> myChats = [];
+
+              map.forEach((chatRoomId, value) {
+                if (chatRoomId.toString().contains(currentUserId)) {
+                  List<String> parts = chatRoomId.toString().split('_');
+                  String otherUserId = parts.firstWhere(
+                    (id) => id != currentUserId,
+                    orElse: () => '',
+                  );
+
+                  if (otherUserId.isNotEmpty) {
+                    myChats.add({
+                      'chatRoomId': chatRoomId.toString(),
+                      'otherUserId': otherUserId,
+                    });
+                  }
+                }
+              });
+
+              if (myChats.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.forum_outlined, size: 64, color: Colors.grey[500]),
+                      const SizedBox(height: 10),
+                      Text('No chat conversations yet.', style: TextStyle(color: Colors.grey[700])),
+                    ],
+                  ),
+                );
+              }
+
+              return ListView.builder(
+                padding: const EdgeInsets.all(14),
+                itemCount: myChats.length,
+                itemBuilder: (context, index) {
+                  String otherUserId = myChats[index]['otherUserId']!;
+
+                  return FutureBuilder(
+                    future: _dbRef.child('users').child(otherUserId).get(),
+                    builder: (context, AsyncSnapshot<DataSnapshot> userSnapshot) {
+                      String name = 'COMSATS Student';
+                      if (userSnapshot.hasData && userSnapshot.data?.value != null) {
+                        Map<dynamic, dynamic> userData = userSnapshot.data!.value as Map<dynamic, dynamic>;
+                        name = userData['name'] ?? 'COMSATS Student';
+                      }
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.9),
+                          borderRadius: BorderRadius.circular(18),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
                         ),
-                      ),
-                    );
-                  },
-                ),
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: brandNavy,
+                            child: Text(
+                              name.isNotEmpty ? name[0].toUpperCase() : 'U',
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          title: Text(
+                            name,
+                            style: const TextStyle(fontWeight: FontWeight.bold, color: brandNavy),
+                          ),
+                          subtitle: const Text('Tap to open conversation'),
+                          trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: brandAccent),
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ChatScreen(
+                                  receiverId: otherUserId,
+                                  receiverName: name,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  );
+                },
               );
             },
-          );
-        },
+          ),
+        ],
       ),
     );
   }
