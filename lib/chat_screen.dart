@@ -3,15 +3,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 
 class ChatScreen extends StatefulWidget {
-  final String sellerId;
-  final String bookTitle;
-  final String bookId;
+  final String receiverId;
+  final String receiverName;
 
   const ChatScreen({
     super.key,
-    required this.sellerId,
-    required this.bookTitle,
-    required this.bookId,
+    required this.receiverId,
+    required this.receiverName,
   });
 
   @override
@@ -21,43 +19,36 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
-
+  late DatabaseReference _chatDbRef;
   late String _chatRoomId;
-  String _otherUserName = '';
+
+  static const Color brandDarkNavy = Color(0xFF002147);
+  static const Color bgSurface = Color(0xFFF4F6F9);
 
   @override
   void initState() {
     super.initState();
-    String currentUserId = _auth.currentUser?.uid ?? '';
-    List<String> ids = [currentUserId, widget.sellerId];
+    String currentUserId = _auth.currentUser?.uid ?? 'guest';
+    List<String> ids = [currentUserId, widget.receiverId];
     ids.sort();
-    _chatRoomId = "${ids.join('_')}_${widget.bookId}";
-
-    _fetchOtherUserDetails();
+    _chatRoomId = ids.join('_');
+    _chatDbRef = FirebaseDatabase.instance.ref().child('chats').child(_chatRoomId);
   }
 
-  Future<void> _fetchOtherUserDetails() async {
-    try {
-      DataSnapshot snapshot = await _dbRef.child('users').child(widget.sellerId).get();
-      if (snapshot.exists && snapshot.value != null) {
-        Map<dynamic, dynamic> userData = snapshot.value as Map<dynamic, dynamic>;
-        String? name = userData['name'];
-        String? email = userData['email'];
+  void _sendMessage() {
+    String text = _messageController.text.trim();
+    if (text.isEmpty) return;
 
-        if (mounted) {
-          setState(() {
-            if (name != null && name.trim().isNotEmpty) {
-              _otherUserName = name;
-            } else if (email != null && email.contains('@')) {
-              _otherUserName = email.split('@')[0];
-            }
-          });
-        }
-      }
-    } catch (e) {
-      print("Error fetching user details: $e");
-    }
+    String currentUserId = _auth.currentUser?.uid ?? '';
+
+    _chatDbRef.push().set({
+      'senderId': currentUserId,
+      'receiverId': widget.receiverId,
+      'message': text,
+      'timestamp': ServerValue.timestamp,
+    });
+
+    _messageController.clear();
   }
 
   String _formatTime(dynamic timestamp) {
@@ -76,68 +67,32 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _sendMessage() async {
-    String text = _messageController.text.trim();
-    if (text.isEmpty) return;
-
-    User? currentUser = _auth.currentUser;
-    if (currentUser == null) return;
-
-    String currentUserName = currentUser.email?.split('@')[0] ?? 'User';
-    try {
-      DataSnapshot userSnap = await _dbRef.child('users').child(currentUser.uid).get();
-      if (userSnap.exists && userSnap.value != null) {
-        Map<dynamic, dynamic> userData = userSnap.value as Map<dynamic, dynamic>;
-        if (userData['name'] != null && userData['name'].toString().trim().isNotEmpty) {
-          currentUserName = userData['name'];
-        }
-      }
-    } catch (e) {
-      print("Error getting current user name: $e");
-    }
-
-    String finalOtherName = _otherUserName.isEmpty ? 'User' : _otherUserName;
-
-    // Save Chat Metadata
-    await _dbRef.child('chats').child(_chatRoomId).child('meta').set({
-      'bookTitle': widget.bookTitle,
-      'bookId': widget.bookId,
-      'user1_id': currentUser.uid,
-      'user1_name': currentUserName,
-      'user2_id': widget.sellerId,
-      'user2_name': finalOtherName,
-      'lastMessage': text,
-      'lastTimestamp': ServerValue.timestamp,
-    });
-
-    // Send Message
-    _dbRef.child('chats').child(_chatRoomId).child('messages').push().set({
-      'senderId': currentUser.uid,
-      'message': text,
-      'timestamp': ServerValue.timestamp,
-    });
-
-    _messageController.clear();
-  }
-
   @override
   Widget build(BuildContext context) {
-    const navyBlue = Color(0xFF002147);
     String currentUserId = _auth.currentUser?.uid ?? '';
 
     return Scaffold(
+      backgroundColor: bgSurface,
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        backgroundColor: brandDarkNavy,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        titleSpacing: 0,
+        title: Row(
           children: [
-            _otherUserName.isEmpty
-                ? const SizedBox(
-                    height: 16,
-                    width: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                  )
-                : Text(_otherUserName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            Text('Book: ${widget.bookTitle}', style: const TextStyle(fontSize: 12, color: Colors.white70)),
+            CircleAvatar(
+              backgroundColor: Colors.white.withValues(alpha: 0.15),
+              radius: 18,
+              child: Text(
+                widget.receiverName.isNotEmpty ? widget.receiverName[0].toUpperCase() : 'U',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              widget.receiverName,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
           ],
         ),
       ),
@@ -145,53 +100,67 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           Expanded(
             child: StreamBuilder(
-              stream: _dbRef.child('chats').child(_chatRoomId).child('messages').onValue,
+              stream: _chatDbRef.onValue,
               builder: (context, AsyncSnapshot<DatabaseEvent> snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
+                  return const Center(child: CircularProgressIndicator(color: brandDarkNavy));
                 }
 
-                if (!snapshot.hasData || snapshot.data?.snapshot.value == null) {
-                  return const Center(
-                    child: Text('Say Hi! Start conversation about this book.', style: TextStyle(color: Colors.grey)),
+                if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
+                  return Center(
+                    child: Text(
+                      'Say hi to ${widget.receiverName}!',
+                      style: TextStyle(color: Colors.grey[500]),
+                    ),
                   );
                 }
 
                 Map<dynamic, dynamic> map = snapshot.data!.snapshot.value as Map<dynamic, dynamic>;
-                List<dynamic> messages = map.values.toList();
+                List<Map<String, dynamic>> messagesList = [];
 
-                messages.sort((a, b) => (a['timestamp'] ?? 0).compareTo(b['timestamp'] ?? 0));
+                map.forEach((key, value) {
+                  messagesList.add({
+                    'id': key,
+                    'senderId': value['senderId'] ?? '',
+                    'message': value['message'] ?? '',
+                    'timestamp': value['timestamp'] ?? 0,
+                  });
+                });
+
+                messagesList.sort((a, b) => (a['timestamp'] as int).compareTo(b['timestamp'] as int));
 
                 return ListView.builder(
-                  padding: const EdgeInsets.all(12.0),
-                  itemCount: messages.length,
+                  padding: const EdgeInsets.all(12),
+                  itemCount: messagesList.length,
                   itemBuilder: (context, index) {
-                    var msg = messages[index];
-                    bool isMe = msg['senderId'] == currentUserId;
+                    final msg = messagesList[index];
+                    final isMe = msg['senderId'] == currentUserId;
                     String formattedTime = _formatTime(msg['timestamp']);
 
                     return Align(
                       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                       child: Container(
-                        margin: const EdgeInsets.symmetric(vertical: 4.0),
-                        padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 8.0),
+                        margin: const EdgeInsets.symmetric(vertical: 4),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                         decoration: BoxDecoration(
-                          color: isMe ? navyBlue : Colors.grey[200],
-                          borderRadius: BorderRadius.only(
-                            topLeft: const Radius.circular(12),
-                            topRight: const Radius.circular(12),
-                            bottomLeft: Radius.circular(isMe ? 12 : 0),
-                            bottomRight: Radius.circular(isMe ? 0 : 12),
-                          ),
+                          color: isMe ? brandDarkNavy : Colors.white,
+                          borderRadius: BorderRadius.circular(14),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.03),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                         ),
                         child: Column(
                           crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                           children: [
                             Text(
-                              msg['message'] ?? '',
+                              msg['message'],
                               style: TextStyle(
-                                color: isMe ? Colors.white : Colors.black87,
-                                fontSize: 15,
+                                color: isMe ? Colors.white : brandDarkNavy,
+                                fontSize: 14,
                               ),
                             ),
                             if (formattedTime.isNotEmpty) ...[
@@ -199,7 +168,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               Text(
                                 formattedTime,
                                 style: TextStyle(
-                                  color: isMe ? Colors.white70 : Colors.black54,
+                                  color: isMe ? Colors.white70 : Colors.grey[500],
                                   fontSize: 10,
                                 ),
                               ),
@@ -214,7 +183,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
           Container(
-            padding: const EdgeInsets.all(8.0),
+            padding: const EdgeInsets.all(10),
             color: Colors.white,
             child: Row(
               children: [
@@ -223,18 +192,22 @@ class _ChatScreenState extends State<ChatScreen> {
                     controller: _messageController,
                     decoration: InputDecoration(
                       hintText: 'Type a message...',
+                      hintStyle: TextStyle(color: Colors.grey[400], fontSize: 13),
+                      filled: true,
+                      fillColor: bgSurface,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide.none,
                       ),
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
                 CircleAvatar(
-                  backgroundColor: navyBlue,
+                  backgroundColor: brandDarkNavy,
                   child: IconButton(
-                    icon: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
+                    icon: const Icon(Icons.send_rounded, color: Colors.white, size: 18),
                     onPressed: _sendMessage,
                   ),
                 ),

@@ -20,14 +20,16 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
   final DatabaseReference _booksDbRef = FirebaseDatabase.instance.ref().child('books');
   late DatabaseReference _aiChatDbRef;
 
-  static const String _apiKey =  'AQ.Ab8RN6KKBzTtPUMC9J4Jc-X9K1R5xB4ON0JTQH27JjSYhYtypQ';
+  static const String _apiKey = '';
 
-  // Strictly active models list
+  // Stable active Gemini models list
   final List<String> _models = [
-    'gemini-3.8-flash',
-    'gemini-2.5-flash',
     'gemini-1.5-flash',
+    'gemini-pro',
   ];
+
+  static const Color brandNavy = Color(0xFF0B192C);
+  static const Color brandAccent = Color(0xFF0077B6);
 
   @override
   void initState() {
@@ -181,10 +183,9 @@ STRICT INSTRUCTIONS:
     String aiReply = '';
     String fullPrompt = "$systemInstruction\n\nUser Question: $text";
 
-    // Attempt API calls with active models when a key is configured.
-    if (_apiKey.isNotEmpty) {
+    if (_apiKey.isNotEmpty && _apiKey.startsWith('AIzaSy')) {
       for (String model in _models) {
-        for (int attempt = 0; attempt < 2; attempt++) { // Retry loop for 503 errors
+        for (int attempt = 0; attempt < 2; attempt++) {
           try {
             final url = Uri.parse(
                 'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$_apiKey');
@@ -195,7 +196,7 @@ STRICT INSTRUCTIONS:
                   "parts": [
                     {"text": fullPrompt}
                   ]
-                ]
+                }
               ]
             });
 
@@ -207,23 +208,22 @@ STRICT INSTRUCTIONS:
 
             if (response.statusCode == 200) {
               final data = jsonDecode(response.body);
-              aiReply = data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+              aiReply = data['candidates']?[0]?['content']?['parts']?[0]?['text'] ?? '';
               if (aiReply.isNotEmpty) {
                 success = true;
                 break;
               }
             } else if (response.statusCode == 503) {
-              await Future.delayed(const Duration(milliseconds: 800)); // Small wait on high demand
+              await Future.delayed(const Duration(milliseconds: 800));
             }
           } catch (e) {
-            // Ignore and continue
+            // Continue trying fallback models
           }
-        } catch (e) {
+        }
         if (success) break;
       }
     }
 
-    // Use intelligent fallback if API endpoints are busy
     if (!success || aiReply.isEmpty) {
       aiReply = _generateLocalFallbackResponse(text, availableBooksContext);
     }
@@ -265,144 +265,181 @@ STRICT INSTRUCTIONS:
 
   @override
   Widget build(BuildContext context) {
-    const navyBlue = Color(0xFF002147);
-
     return Scaffold(
-      body: Column(
+      body: Stack(
         children: [
+          // Background Gradient Decor Layer
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            color: navyBlue.withOpacity(0.05),
-            child: Row(
-              children: [
-                const Icon(Icons.smart_toy_outlined, color: navyBlue),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Text(
-                    'Campus AI Assistant (Auto-deletes in 24h)',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: navyBlue),
-                  ),
-                ),
-                if (_messages.isNotEmpty)
-                  IconButton(
-                    icon: const Icon(Icons.delete_sweep_outlined, color: Colors.redAccent),
-                    tooltip: 'Clear Chat History',
-                    onPressed: () {
-                      showDialog(
-                        context: context,
-                        builder: (context) => AlertDialog(
-                          title: const Text('Clear Chat'),
-                          content: const Text('Are you sure you want to clear AI conversation history?'),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(context),
-                              child: const Text('Cancel'),
-                            ),
-                            TextButton(
-                              onPressed: () {
-                                Navigator.pop(context);
-                                _clearChatHistory();
-                              },
-                              child: const Text('Clear', style: TextStyle(color: Colors.red)),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-              ],
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFFE2E8F0), Color(0xFFEDF2F7), Color(0xFFCBD5E1)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
             ),
           ),
-          Expanded(
-            child: _messages.isEmpty
-                ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(20.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.psychology_outlined, size: 60, color: Colors.grey),
-                          SizedBox(height: 10),
-                          Text(
-                            'Ask AI if any textbook (e.g. Calculus, Physics, OOP) is currently available in the campus database!',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey),
-                          ),
-                        ],
+          Positioned(
+            top: -30,
+            right: -30,
+            child: Container(
+              width: 180,
+              height: 180,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: brandAccent.withValues(alpha: 0.18),
+              ),
+            ),
+          ),
+
+          Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                color: brandNavy.withValues(alpha: 0.05),
+                child: Row(
+                  children: [
+                    const Icon(Icons.smart_toy_outlined, color: brandNavy),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Campus AI Assistant (Auto-deletes in 24h)',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: brandNavy),
                       ),
                     ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(12),
-                    itemCount: _messages.length,
-                    itemBuilder: (context, index) {
-                      final msg = _messages[index];
-                      final isMe = msg['role'] == 'user';
-                      String formattedTime = _formatTime(msg['timestamp']);
-
-                      return Align(
-                        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(vertical: 4),
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: isMe ? navyBlue : Colors.grey[200],
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                msg['text'] ?? '',
-                                style: TextStyle(color: isMe ? Colors.white : Colors.black87, fontSize: 15),
-                              ),
-                              if (formattedTime.isNotEmpty) ...[
-                                const SizedBox(height: 2),
-                                Text(
-                                  formattedTime,
-                                  style: TextStyle(
-                                    color: isMe ? Colors.white70 : Colors.black54,
-                                    fontSize: 10,
-                                  ),
+                    if (_messages.isNotEmpty)
+                      IconButton(
+                        icon: const Icon(Icons.delete_sweep_outlined, color: Colors.redAccent),
+                        tooltip: 'Clear Chat History',
+                        onPressed: () {
+                          showDialog(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('Clear Chat'),
+                              content: const Text('Are you sure you want to clear AI conversation history?'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  child: const Text('Cancel'),
+                                ),
+                                TextButton(
+                                  onPressed: () {
+                                    Navigator.pop(context);
+                                    _clearChatHistory();
+                                  },
+                                  child: const Text('Clear', style: TextStyle(color: Colors.red)),
                                 ),
                               ],
+                            ),
+                          );
+                        },
+                      ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: _messages.isEmpty
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(20.0),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.psychology_outlined, size: 60, color: Colors.grey),
+                              SizedBox(height: 10),
+                              Text(
+                                'Ask AI if any textbook (e.g. Calculus, Physics, OOP) is currently available in the campus database!',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: Colors.grey),
+                              ),
                             ],
                           ),
                         ),
-                      );
-                    },
-                  ),
-          ),
-          if (_isLoading)
-            const Padding(
-              padding: EdgeInsets.all(8.0),
-              child: LinearProgressIndicator(color: navyBlue),
-            ),
-          Container(
-            padding: const EdgeInsets.all(8.0),
-            color: Colors.white,
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    decoration: InputDecoration(
-                      hintText: 'Ask about available books or courses...',
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.all(12),
+                        itemCount: _messages.length,
+                        itemBuilder: (context, index) {
+                          final msg = _messages[index];
+                          final isMe = msg['role'] == 'user';
+                          String formattedTime = _formatTime(msg['timestamp']);
+
+                          return Align(
+                            alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(vertical: 4),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: isMe ? brandNavy : Colors.white.withValues(alpha: 0.9),
+                                borderRadius: BorderRadius.circular(12),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.04),
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    msg['text'] ?? '',
+                                    style: TextStyle(color: isMe ? Colors.white : Colors.black87, fontSize: 15),
+                                  ),
+                                  if (formattedTime.isNotEmpty) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      formattedTime,
+                                      style: TextStyle(
+                                        color: isMe ? Colors.white70 : Colors.black54,
+                                        fontSize: 10,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              if (_isLoading)
+                const Padding(
+                  padding: EdgeInsets.all(8.0),
+                  child: LinearProgressIndicator(color: brandNavy),
+                ),
+              Container(
+                padding: const EdgeInsets.all(8.0),
+                color: Colors.white.withValues(alpha: 0.9),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _controller,
+                        decoration: InputDecoration(
+                          hintText: 'Ask about available books or courses...',
+                          filled: true,
+                          fillColor: const Color(0xFFF1F5F9),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    CircleAvatar(
+                      backgroundColor: brandNavy,
+                      child: IconButton(
+                        icon: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
+                        onPressed: _sendMessage,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                CircleAvatar(
-                  backgroundColor: navyBlue,
-                  child: IconButton(
-                    icon: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
-                    onPressed: _sendMessage,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ],
       ),
