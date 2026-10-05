@@ -14,8 +14,10 @@ class _AddBookScreenState extends State<AddBookScreen> {
   final TextEditingController _authorController = TextEditingController();
   final TextEditingController _priceController = TextEditingController();
   final TextEditingController _descController = TextEditingController();
+  final TextEditingController _customDeptController = TextEditingController();
 
   String _selectedDepartment = 'Computer Science';
+  String _selectedCondition = 'New';
   bool _isLoading = false;
 
   static const Color brandNavy = Color(0xFF0B192C);
@@ -41,15 +43,28 @@ class _AddBookScreenState extends State<AddBookScreen> {
     'Other / General',
   ];
 
+  final List<String> _conditions = ['New', 'Old'];
+
   Future<void> _submitBook() async {
     String title = _titleController.text.trim();
     String author = _authorController.text.trim();
     String price = _priceController.text.trim();
     String desc = _descController.text.trim();
 
+    String finalDept = _selectedDepartment == 'Other / General'
+        ? (_customDeptController.text.trim().isEmpty ? 'Other' : _customDeptController.text.trim())
+        : _selectedDepartment;
+
     if (title.isEmpty || author.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please enter Title and Author name')),
+      );
+      return;
+    }
+
+    if (_selectedDepartment == 'Other / General' && _customDeptController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter your Department name')),
       );
       return;
     }
@@ -68,7 +83,8 @@ class _AddBookScreenState extends State<AddBookScreen> {
         'title': title,
         'author': author,
         'price': price.isEmpty ? 'Free' : price,
-        'department': _selectedDepartment,
+        'department': finalDept,
+        'condition': _selectedCondition,
         'description': desc,
         'userId': userId,
         'sellerName': sellerName,
@@ -84,6 +100,7 @@ class _AddBookScreenState extends State<AddBookScreen> {
         _authorController.clear();
         _priceController.clear();
         _descController.clear();
+        _customDeptController.clear();
       }
     } catch (e) {
       if (mounted) {
@@ -94,6 +111,16 @@ class _AddBookScreenState extends State<AddBookScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _authorController.dispose();
+    _priceController.dispose();
+    _descController.dispose();
+    _customDeptController.dispose();
+    super.dispose();
   }
 
   @override
@@ -203,12 +230,25 @@ class _AddBookScreenState extends State<AddBookScreen> {
                     ),
                     const SizedBox(height: 10),
 
-                    // Compact Limited Dropdown Menu
+                    // Compact Overflow-Proof Department Dropdown
                     DropdownButtonFormField<String>(
                       value: _selectedDepartment,
                       isExpanded: true,
-                      menuMaxHeight: 250, // Popup menu max height fix
+                      menuMaxHeight: 250,
                       borderRadius: BorderRadius.circular(16),
+                      selectedItemBuilder: (BuildContext context) {
+                        return _departments.map<Widget>((String dept) {
+                          return Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              dept,
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              style: const TextStyle(fontSize: 13, color: brandNavy),
+                            ),
+                          );
+                        }).toList();
+                      },
                       decoration: InputDecoration(
                         labelText: 'Department',
                         isDense: true,
@@ -224,6 +264,7 @@ class _AddBookScreenState extends State<AddBookScreen> {
                           child: Text(
                             dept,
                             overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
                             style: const TextStyle(fontSize: 13, color: brandNavy),
                           ),
                         );
@@ -232,12 +273,60 @@ class _AddBookScreenState extends State<AddBookScreen> {
                         if (val != null) setState(() => _selectedDepartment = val);
                       },
                     ),
+
+                    // Dynamic Custom Department Input when 'Other / General' is selected
+                    if (_selectedDepartment == 'Other / General') ...[
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _customDeptController,
+                        decoration: InputDecoration(
+                          labelText: 'Enter Your Department Name',
+                          isDense: true,
+                          prefixIcon: const Icon(Icons.edit_note_rounded, color: brandAccent, size: 20),
+                          filled: true,
+                          fillColor: Colors.white,
+                          contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 10),
+
+                    // Book Condition Dropdown (New / Old)
+                    DropdownButtonFormField<String>(
+                      value: _selectedCondition,
+                      isExpanded: true,
+                      borderRadius: BorderRadius.circular(16),
+                      decoration: InputDecoration(
+                        labelText: 'Book Condition',
+                        isDense: true,
+                        prefixIcon: const Icon(Icons.auto_awesome_rounded, color: brandAccent, size: 20),
+                        filled: true,
+                        fillColor: Colors.white,
+                        contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                      ),
+                      items: _conditions.map((cond) {
+                        return DropdownMenuItem(
+                          value: cond,
+                          child: Text(
+                            cond,
+                            style: const TextStyle(fontSize: 13, color: brandNavy),
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) setState(() => _selectedCondition = val);
+                      },
+                    ),
+
                     const SizedBox(height: 10),
                     TextField(
                       controller: _descController,
                       maxLines: 2,
                       decoration: InputDecoration(
-                        labelText: 'Description / Condition',
+                        labelText: 'Description / Details',
                         alignLabelWithHint: true,
                         isDense: true,
                         prefixIcon: const Icon(Icons.description_rounded, color: brandAccent, size: 20),
