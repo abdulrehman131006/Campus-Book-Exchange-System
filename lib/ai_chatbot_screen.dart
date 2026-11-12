@@ -13,19 +13,19 @@ class AIChatbotScreen extends StatefulWidget {
 
 class _AIChatbotScreenState extends State<AIChatbotScreen> {
   final TextEditingController _controller = TextEditingController();
-  final List<Map<String, dynamic>> _messages = [];
+  final List _messages = [];
   bool _isLoading = false;
 
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final DatabaseReference _booksDbRef = FirebaseDatabase.instance.ref().child('books');
   late DatabaseReference _aiChatDbRef;
 
-  static const String _apiKey = '';
+  // Aap ki copied API Key
+  static const String _apiKey = 'AQ.Ab8RN6JwQHwIKj19xbGB01To90hMT9f45-UazysX_sc502t0Cg';
 
-  // Stable active Gemini models list
   final List<String> _models = [
     'gemini-1.5-flash',
-    'gemini-pro',
+    'gemini-1.5-pro',
   ];
 
   static const Color brandNavy = Color(0xFF0B192C);
@@ -55,7 +55,6 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
     }
   }
 
-  // 24 Hours Auto-Delete logic
   Future<void> _loadAndCleanOldChatHistory() async {
     try {
       DataSnapshot snapshot = await _aiChatDbRef.get();
@@ -64,14 +63,14 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
         int now = DateTime.now().millisecondsSinceEpoch;
         const int twentyFourHoursInMs = 24 * 60 * 60 * 1000;
 
-        List<Map<String, dynamic>> validMessages = [];
+        List tempMessages = [];
 
         map.forEach((key, value) {
           int messageTime = value['timestamp'] ?? 0;
           if (now - messageTime > twentyFourHoursInMs) {
             _aiChatDbRef.child(key).remove();
           } else {
-            validMessages.add({
+            tempMessages.add({
               'role': value['role'] ?? 'user',
               'text': value['text'] ?? '',
               'timestamp': messageTime,
@@ -79,14 +78,14 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
           }
         });
 
-        validMessages.sort((a, b) => (a['timestamp'] as int).compareTo(b['timestamp'] as int));
+        tempMessages.sort((a, b) => ((a as Map)['timestamp'] as int).compareTo((b as Map)['timestamp'] as int));
 
         if (mounted) {
           setState(() {
             _messages.clear();
-            for (var item in validMessages) {
+            for (var item in tempMessages) {
               _messages.add({
-                'role': item['role'],
+                'role': (item as Map)['role'],
                 'text': item['text'],
                 'timestamp': item['timestamp'],
               });
@@ -99,47 +98,80 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
     }
   }
 
-  Future<String> _fetchCurrentAvailableBooksContext() async {
+  Future<List> _getAvailableBooksFromDb() async {
+    List booksList = [];
     try {
       DataSnapshot snapshot = await _booksDbRef.get();
-      if (!snapshot.exists || snapshot.value == null) {
-        return "CURRENTLY LISTED BOOKS IN APP: No books are listed right now.";
+      if (snapshot.exists && snapshot.value != null) {
+        Map<dynamic, dynamic> map = snapshot.value as Map<dynamic, dynamic>;
+        map.forEach((key, value) {
+          booksList.add({
+            'title': value['title']?.toString() ?? 'Untitled',
+            'author': value['author']?.toString() ?? 'Unknown Author',
+            'department': value['department']?.toString() ?? 'General',
+            'price': value['price']?.toString() ?? 'Free',
+            'sellerName': value['sellerName']?.toString() ?? 'Student',
+            'bookCode': value['bookCode']?.toString() ?? '',
+          });
+        });
       }
-
-      Map<dynamic, dynamic> map = snapshot.value as Map<dynamic, dynamic>;
-      List<String> booksSummaryList = [];
-
-      map.forEach((key, value) {
-        String title = value['title'] ?? 'Untitled';
-        String author = value['author'] ?? 'Unknown Author';
-        String dept = value['department'] ?? 'General';
-        String price = value['price'] ?? 'Free';
-        
-        booksSummaryList.add("- Title: '$title', Author: '$author', Department: '$dept', Price: '$price'");
-      });
-
-      return "CURRENTLY LISTED BOOKS IN APP DATABASE:\n${booksSummaryList.join('\n')}";
-    } catch (e) {
-      return "CURRENTLY LISTED BOOKS IN APP DATABASE: Unable to fetch live database context.";
-    }
+    } catch (_) {}
+    return booksList;
   }
 
-  // Fallback local intelligent response generator
-  String _generateLocalFallbackResponse(String userText, String booksContext) {
-    String lower = userText.toLowerCase();
-    if (lower.contains('hi') || lower.contains('hello') || lower.contains('hy') || lower.contains('hey')) {
-      return "Hello! I am your Campus AI Assistant. Ask me about available textbooks in COMSATS or course guidance!";
+  Future<String> _generateSmartFallbackResponse(String userText) async {
+    String query = userText.toLowerCase().trim();
+    List books = await _getAvailableBooksFromDb();
+
+    List<String> queryWords = query
+        .replaceAll(RegExp(r'(is|book|available|in|app|store|campus|the|please|tell|me|show|list|any|details)'), ' ')
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((w) => w.length > 2)
+        .toList();
+
+    bool isBookIntent = query.contains('book') || query.contains('available') || query.contains('price') || query.contains('seller') || query.contains('is');
+
+    List matches = [];
+    if (isBookIntent || queryWords.isNotEmpty) {
+      matches = books.where((b) {
+        Map bookMap = b as Map;
+        String title = bookMap['title'].toString().toLowerCase();
+        String author = bookMap['author'].toString().toLowerCase();
+        String dept = bookMap['department'].toString().toLowerCase();
+
+        return queryWords.any((word) {
+          return title.contains(word) ||
+                 author.contains(word) ||
+                 dept.contains(word) ||
+                 (word.length > 3 && title.startsWith(word.substring(0, 3)));
+        });
+      }).toList();
     }
-    
-    if (lower.contains('calculus') || lower.contains('cal') || lower.contains('math')) {
-      if (booksContext.toLowerCase().contains('calculus')) {
-        return "Yes! Calculus textbook is currently available in the app. Check the Books tab or contact the seller directly!";
+
+    if (isBookIntent) {
+      if (matches.isNotEmpty) {
+        StringBuffer sb = StringBuffer("📚 Matching book(s) found in campus database:\n\n");
+        for (var item in matches.take(3)) {
+          Map b = item as Map;
+          sb.writeln("📖 Title: ${b['title']}");
+          sb.writeln("👤 Author: ${b['author']}");
+          sb.writeln("💵 Price: PKR ${b['price']}");
+          sb.writeln("🏬 Department: ${b['department']}\n");
+        }
+        sb.write("Check the 'Books' feed tab to contact the seller directly!");
+        return sb.toString();
       } else {
-        return "Calculus textbook is currently not listed by any seller on the app. Recommended syllabus book: 'Calculus by Thomas Finney'.";
+        String searchedTerm = queryWords.isNotEmpty ? queryWords.join(' ') : userText;
+        return "Currently, no book matching '$searchedTerm' is listed on the app. Check back later or ask in the student chat feed!";
       }
     }
 
-    return "I am specialized in COMSATS academics and Campus Book Exchange app support. Please check the 'Books' tab for active listings or ask course textbook queries!";
+    if (query == 'hi' || query == 'hello' || query == 'hey' || query.contains('assalam')) {
+      return "Hello! I am your COMSATS Campus AI Assistant. Ask me about textbook availability, course topics, method explanations, or syllabus guidance!";
+    }
+
+    return "I am ready to assist with your studies! Ask me any course question, topic explanation, or book query.";
   }
 
   Future<void> _sendMessage() async {
@@ -164,68 +196,58 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
       'timestamp': ServerValue.timestamp,
     });
 
-    String availableBooksContext = await _fetchCurrentAvailableBooksContext();
+    List books = await _getAvailableBooksFromDb();
+    String booksSummary = books.map((item) {
+      Map b = item as Map;
+      return "- Title: ${b['title']}, Author: ${b['author']}, Price: ${b['price']}, Dept: ${b['department']}";
+    }).join("\n");
 
     String systemInstruction = '''
-You are "Campus AI Assistant", a dedicated AI helper for COMSATS University students using the Campus Book Exchange app.
+You are Campus AI Assistant, an expert universal academic tutor for COMSATS University Islamabad students across ALL departments (Computer Science, Software Engineering, Electrical, Civil, Mechanical, BBA, Accounting, Mathematics, Physics, Humanities, etc.).
 
-$availableBooksContext
+Your Job:
+1. Provide accurate, clear, and step-by-step academic guidance for ANY subject question, formula, topic explanation, or syllabus query.
+2. If the student asks about book availability, search the CURRENTLY LISTED BOOKS database below and show exact matching results.
 
-STRICT INSTRUCTIONS:
-1. Check the CURRENTLY LISTED BOOKS above when a user asks about available books.
-2. If matched, give Title, Author, Department, and Price.
-3. If not matched, state it's currently unavailable and suggest the COMSATS syllabus reference book.
-4. ONLY answer queries related to COMSATS courses, textbooks, academic guidance, and app support. Decline unrelated queries politely.
-5. Keep answers concise and helpful.
+CURRENTLY LISTED BOOKS IN APP DATABASE:
+$booksSummary
 ''';
 
     bool success = false;
     String aiReply = '';
-    String fullPrompt = "$systemInstruction\n\nUser Question: $text";
 
-    if (_apiKey.isNotEmpty && _apiKey.startsWith('AIzaSy')) {
+    if (_apiKey.trim().isNotEmpty) {
       for (String model in _models) {
-        for (int attempt = 0; attempt < 2; attempt++) {
-          try {
-            final url = Uri.parse(
-                'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$_apiKey');
-
-            final body = jsonEncode({
+        try {
+          final url = Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$_apiKey');
+          final response = await http.post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
               "contents": [
                 {
                   "parts": [
-                    {"text": fullPrompt}
+                    {"text": "$systemInstruction\n\nUser Question: $text"}
                   ]
                 }
               ]
-            });
+            }),
+          );
 
-            final response = await http.post(
-              url,
-              headers: {'Content-Type': 'application/json'},
-              body: body,
-            );
-
-            if (response.statusCode == 200) {
-              final data = jsonDecode(response.body);
-              aiReply = data['candidates']?[0]?['content']?['parts']?[0]?['text'] ?? '';
-              if (aiReply.isNotEmpty) {
-                success = true;
-                break;
-              }
-            } else if (response.statusCode == 503) {
-              await Future.delayed(const Duration(milliseconds: 800));
+          if (response.statusCode == 200) {
+            final data = jsonDecode(response.body);
+            aiReply = data['candidates']?[0]?['content']?['parts']?[0]?['text'] ?? '';
+            if (aiReply.isNotEmpty) {
+              success = true;
+              break;
             }
-          } catch (e) {
-            // Continue trying fallback models
           }
-        }
-        if (success) break;
+        } catch (_) {}
       }
     }
 
     if (!success || aiReply.isEmpty) {
-      aiReply = _generateLocalFallbackResponse(text, availableBooksContext);
+      aiReply = await _generateSmartFallbackResponse(text);
     }
 
     int aiTimestamp = DateTime.now().millisecondsSinceEpoch;
@@ -268,7 +290,6 @@ STRICT INSTRUCTIONS:
     return Scaffold(
       body: Stack(
         children: [
-          // Background Gradient Decor Layer
           Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(
@@ -278,168 +299,169 @@ STRICT INSTRUCTIONS:
               ),
             ),
           ),
-          Positioned(
-            top: -30,
-            right: -30,
-            child: Container(
-              width: 180,
-              height: 180,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: brandAccent.withValues(alpha: 0.18),
-              ),
-            ),
-          ),
-
-          Column(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                color: brandNavy.withValues(alpha: 0.05),
-                child: Row(
-                  children: [
-                    const Icon(Icons.smart_toy_outlined, color: brandNavy),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        'Campus AI Assistant (Auto-deletes in 24h)',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: brandNavy),
+          SafeArea(
+            child: Column(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  color: brandNavy.withOpacity(0.05),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.smart_toy_outlined, color: brandNavy),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Campus AI Assistant (Auto-deletes in 24h)',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: brandNavy),
+                        ),
                       ),
-                    ),
-                    if (_messages.isNotEmpty)
-                      IconButton(
-                        icon: const Icon(Icons.delete_sweep_outlined, color: Colors.redAccent),
-                        tooltip: 'Clear Chat History',
-                        onPressed: () {
-                          showDialog(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text('Clear Chat'),
-                              content: const Text('Are you sure you want to clear AI conversation history?'),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context),
-                                  child: const Text('Cancel'),
-                                ),
-                                TextButton(
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    _clearChatHistory();
-                                  },
-                                  child: const Text('Clear', style: TextStyle(color: Colors.red)),
+                      if (_messages.isNotEmpty)
+                        IconButton(
+                          icon: const Icon(Icons.delete_sweep_outlined, color: Colors.redAccent),
+                          tooltip: 'Clear Chat History',
+                          onPressed: () {
+                            showDialog(
+                              context: context,
+                              builder: (context) => AlertDialog(
+                                title: const Text('Clear Chat'),
+                                content: const Text('Are you sure you want to clear AI conversation history?'),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(context),
+                                    child: const Text('Cancel'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () {
+                                      Navigator.pop(context);
+                                      _clearChatHistory();
+                                    },
+                                    child: const Text('Clear', style: TextStyle(color: Colors.red)),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: _messages.isEmpty
+                      ? const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(20.0),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.psychology_outlined, size: 60, color: Colors.grey),
+                                SizedBox(height: 10),
+                                Text(
+                                  'Ask AI about available textbooks, course topics, concepts, or academic guidance across all departments!',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: Colors.grey),
                                 ),
                               ],
                             ),
-                          );
-                        },
-                      ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: _messages.isEmpty
-                    ? const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(20.0),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.psychology_outlined, size: 60, color: Colors.grey),
-                              SizedBox(height: 10),
-                              Text(
-                                'Ask AI if any textbook (e.g. Calculus, Physics, OOP) is currently available in the campus database!',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: Colors.grey),
-                              ),
-                            ],
                           ),
-                        ),
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.all(12),
-                        itemCount: _messages.length,
-                        itemBuilder: (context, index) {
-                          final msg = _messages[index];
-                          final isMe = msg['role'] == 'user';
-                          String formattedTime = _formatTime(msg['timestamp']);
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.all(12),
+                          itemCount: _messages.length,
+                          itemBuilder: (context, index) {
+                            final msg = _messages[index] as Map;
+                            final isMe = msg['role'] == 'user';
+                            String formattedTime = _formatTime(msg['timestamp']);
 
-                          return Align(
-                            alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(vertical: 4),
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: isMe ? brandNavy : Colors.white.withValues(alpha: 0.9),
-                                borderRadius: BorderRadius.circular(12),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.04),
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
-                              ),
-                              child: Column(
-                                crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    msg['text'] ?? '',
-                                    style: TextStyle(color: isMe ? Colors.white : Colors.black87, fontSize: 15),
-                                  ),
-                                  if (formattedTime.isNotEmpty) ...[
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      formattedTime,
-                                      style: TextStyle(
-                                        color: isMe ? Colors.white70 : Colors.black54,
-                                        fontSize: 10,
-                                      ),
+                            return Align(
+                              alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                              child: Container(
+                                margin: const EdgeInsets.symmetric(vertical: 4),
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: isMe ? brandNavy : Colors.white.withOpacity(0.9),
+                                  borderRadius: BorderRadius.circular(12),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.04),
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2),
                                     ),
                                   ],
-                                ],
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      msg['text']?.toString() ?? '',
+                                      style: TextStyle(color: isMe ? Colors.white : Colors.black87, fontSize: 14),
+                                    ),
+                                    if (formattedTime.isNotEmpty) ...[
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        formattedTime,
+                                        style: TextStyle(
+                                          color: isMe ? Colors.white70 : Colors.black54,
+                                          fontSize: 10,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
                               ),
-                            ),
-                          );
-                        },
-                      ),
-              ),
-              if (_isLoading)
-                const Padding(
-                  padding: EdgeInsets.all(8.0),
-                  child: LinearProgressIndicator(color: brandNavy),
+                            );
+                          },
+                        ),
                 ),
-              Container(
-                padding: const EdgeInsets.all(8.0),
-                color: Colors.white.withValues(alpha: 0.9),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _controller,
-                        decoration: InputDecoration(
-                          hintText: 'Ask about available books or courses...',
-                          filled: true,
-                          fillColor: const Color(0xFFF1F5F9),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(24),
-                            borderSide: BorderSide.none,
+                if (_isLoading)
+                  const Padding(
+                    padding: EdgeInsets.all(6.0),
+                    child: LinearProgressIndicator(color: brandNavy),
+                  ),
+
+                Container(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.95),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 6,
+                        offset: const Offset(0, -2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _controller,
+                          style: const TextStyle(fontSize: 14, color: brandNavy),
+                          decoration: InputDecoration(
+                            hintText: 'Ask about any topic, subject, or book...',
+                            hintStyle: const TextStyle(fontSize: 13, color: Colors.grey),
+                            filled: true,
+                            fillColor: const Color(0xFFF1F5F9),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(24),
+                              borderSide: BorderSide.none,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    CircleAvatar(
-                      backgroundColor: brandNavy,
-                      child: IconButton(
-                        icon: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
-                        onPressed: _sendMessage,
+                      const SizedBox(width: 8),
+                      CircleAvatar(
+                        backgroundColor: brandNavy,
+                        child: IconButton(
+                          icon: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
+                          onPressed: _sendMessage,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),

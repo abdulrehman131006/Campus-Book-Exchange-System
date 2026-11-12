@@ -28,27 +28,47 @@ class _LoginScreenState extends State<LoginScreen> {
     String password = _passwordController.text.trim();
 
     if (email.isEmpty || password.isEmpty) {
-      _showSnackBar('Please enter email and password', isError: true);
+      _showSnackBar('Please enter both email and password', isError: true);
       return;
     }
 
     setState(() => _isLoading = true);
 
     try {
-      await _auth.signInWithEmailAndPassword(
+      UserCredential userCredential = await _auth.signInWithEmailAndPassword(
         email: email,
         password: password,
       );
 
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
+      User? user = userCredential.user;
+      if (user != null) {
+        // Reload user state to get updated emailVerified status
+        await user.reload();
+        user = _auth.currentUser;
+
+        if (user != null && !user.emailVerified) {
+          // Do NOT sign out yet so that Resend Link has active user instance
+          if (mounted) {
+            _showUnverifiedDialog(user);
+          }
+          return;
+        }
+
+        if (mounted) {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (_) => const HomeScreen()),
+            (route) => false,
+          );
+        }
       }
     } on FirebaseAuthException catch (e) {
       if (mounted) {
-        _showSnackBar(e.message ?? 'Login failed', isError: true);
+        _showSnackBar(e.message ?? 'Authentication failed', isError: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        _showSnackBar('An unexpected error occurred: ${e.toString()}', isError: true);
       }
     } finally {
       if (mounted) {
@@ -57,24 +77,63 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _forgotPassword() async {
-    String email = _emailController.text.trim();
-
-    if (email.isEmpty) {
-      _showSnackBar('Please enter your email to reset password', isError: true);
-      return;
-    }
-
-    try {
-      await _auth.sendPasswordResetEmail(email: email);
-      if (mounted) {
-        _showSnackBar('Password reset link sent to $email! Check inbox.');
-      }
-    } catch (e) {
-      if (mounted) {
-        _showSnackBar('Error: ${e.toString()}', isError: true);
-      }
-    }
+  void _showUnverifiedDialog(User user) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Email Not Verified', style: TextStyle(fontWeight: FontWeight.bold, color: brandDarkNavy, fontSize: 16)),
+          ],
+        ),
+        content: const Text(
+          'Your email is not verified yet. Please check your Gmail inbox/spam folder and click the verification link before logging in.',
+          style: TextStyle(fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              try {
+                await user.sendEmailVerification();
+                if (ctx.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Verification link resent to your email!'),
+                      backgroundColor: brandDarkNavy,
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (ctx.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Failed to resend link: ${e.toString()}'),
+                      backgroundColor: Colors.redAccent,
+                    ),
+                  );
+                }
+              }
+            },
+            child: const Text('Resend Link', style: TextStyle(color: brandElectric, fontWeight: FontWeight.bold)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: brandDarkNavy,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await _auth.signOut(); // Sign out only when dialog is dismissed
+            },
+            child: const Text('OK', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showSnackBar(String message, {bool isError = false}) {
@@ -113,42 +172,41 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.12),
+                      color: Colors.white.withValues(alpha: 0.12),
                       shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white.withOpacity(0.2), width: 1.5),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.2), width: 1.5),
                     ),
                     child: const Icon(
                       Icons.menu_book_rounded,
-                      size: 48,
+                      size: 44,
                       color: Colors.white,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
                   const Text(
                     'Campus Book Exchange',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
-                      letterSpacing: 0.2,
+                      letterSpacing: 0.3,
                     ),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
                   Text(
-                    'COMSATS Student Marketplace & AI Support',
+                    'COMSATS University Student Portal',
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.8),
+                      color: Colors.white.withValues(alpha: 0.8),
                       fontSize: 12,
-                      fontWeight: FontWeight.w400,
                     ),
                   ),
                 ],
               ),
             ),
             Transform.translate(
-              offset: const Offset(0, -24),
+              offset: const Offset(0, -20),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24.0),
                 child: Container(
@@ -158,7 +216,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     borderRadius: BorderRadius.circular(28),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.06),
+                        color: Colors.black.withValues(alpha: 0.06),
                         blurRadius: 30,
                         offset: const Offset(0, 10),
                       ),
@@ -168,24 +226,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Welcome Back',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: brandDarkNavy,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Sign in with your university account to continue',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      const Text(
-                        'Email Address',
+                        'Student Email',
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: brandDarkNavy),
                       ),
                       const SizedBox(height: 8),
@@ -194,7 +235,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         keyboardType: TextInputType.emailAddress,
                         style: const TextStyle(fontSize: 14),
                         decoration: InputDecoration(
-                          hintText: 'abc@gmail.com',
+                          hintText: 'student@comsats.edu.pk',
                           hintStyle: TextStyle(color: Colors.grey[400], fontSize: 13),
                           prefixIcon: const Icon(Icons.email_outlined, size: 20, color: brandAccentBlue),
                           filled: true,
@@ -210,7 +251,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 18),
+                      const SizedBox(height: 16),
                       const Text(
                         'Password',
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: brandDarkNavy),
@@ -249,22 +290,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 6),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton(
-                          onPressed: _forgotPassword,
-                          child: const Text(
-                            'Forgot Password?',
-                            style: TextStyle(
-                              color: brandElectric,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 24),
                       Container(
                         width: double.infinity,
                         height: 50,
@@ -277,7 +303,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           borderRadius: BorderRadius.circular(14),
                           boxShadow: [
                             BoxShadow(
-                              color: brandDarkNavy.withOpacity(0.3),
+                              color: brandDarkNavy.withValues(alpha: 0.3),
                               blurRadius: 12,
                               offset: const Offset(0, 4),
                             ),
@@ -312,12 +338,12 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  "New to the app? ",
+                  "Don't have an account? ",
                   style: TextStyle(color: Colors.grey[600], fontSize: 13),
                 ),
                 GestureDetector(
@@ -328,7 +354,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     );
                   },
                   child: const Text(
-                    'Create an Account',
+                    'Create Account',
                     style: TextStyle(
                       color: brandDarkNavy,
                       fontWeight: FontWeight.bold,
