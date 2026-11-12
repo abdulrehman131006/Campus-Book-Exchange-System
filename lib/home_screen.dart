@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -20,7 +21,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref().child('books');
+  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
 
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
@@ -34,20 +35,10 @@ class _HomeScreenState extends State<HomeScreen> {
   String _selectedDeptFilter = 'Filters';
   String _selectedSortOption = 'Sort By';
 
-  List<Map<String, String>> _unreadNotifications = [
-    {
-      'senderId': 'user_1',
-      'senderName': 'Ali Ahmed',
-      'lastMessage': 'Is the C++ textbook still available?',
-      'time': '10m ago',
-    },
-    {
-      'senderId': 'user_2',
-      'senderName': 'Sara Khan',
-      'lastMessage': 'Can you reduce the price to PKR 500?',
-      'time': '1h ago',
-    },
-  ];
+  List _unreadNotifications = [];
+  StreamSubscription<DatabaseEvent>? _chatsSubscription;
+
+  final Map<String, String> _userNamesCache = {};
 
   static const Color brandNavy = Color(0xFF0B192C);
   static const Color brandAccent = Color(0xFF0077B6);
@@ -81,8 +72,86 @@ class _HomeScreenState extends State<HomeScreen> {
     'Price: High to Low',
   ];
 
+  final List _navItems = [
+    {'icon': Icons.grid_view_outlined, 'activeIcon': Icons.grid_view_rounded, 'label': 'Books'},
+    {'icon': Icons.forum_outlined, 'activeIcon': Icons.forum_rounded, 'label': 'Chats'},
+    {'icon': Icons.add_circle_outline_rounded, 'activeIcon': Icons.add_circle_rounded, 'label': 'Sell/Share'},
+    {'icon': Icons.smart_toy_outlined, 'activeIcon': Icons.smart_toy_rounded, 'label': 'AI Helper'},
+    {'icon': Icons.account_circle_outlined, 'activeIcon': Icons.account_circle_rounded, 'label': 'Profile'},
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _listenToUnreadMessages();
+  }
+
+  void _listenToUnreadMessages() {
+    String currentUserId = _auth.currentUser?.uid ?? '';
+    if (currentUserId.isEmpty) return;
+
+    _chatsSubscription = _dbRef.child('chats').onValue.listen((event) async {
+      if (!mounted) return;
+      if (event.snapshot.value == null || event.snapshot.value is! Map) {
+        setState(() {
+          _unreadNotifications = [];
+        });
+        return;
+      }
+
+      Map<dynamic, dynamic> chatsMap = event.snapshot.value as Map<dynamic, dynamic>;
+      List tempNotifications = [];
+
+      for (var entry in chatsMap.entries) {
+        String roomKey = entry.key.toString();
+        if (roomKey.contains(currentUserId) && entry.value is Map) {
+          List<String> parts = roomKey.split('_');
+          String senderId = parts.firstWhere((id) => id != currentUserId, orElse: () => '');
+          
+          if (senderId.isNotEmpty) {
+            Map<dynamic, dynamic> messagesMap = entry.value as Map<dynamic, dynamic>;
+            var sortedEntries = messagesMap.entries.toList();
+            sortedEntries.sort((a, b) {
+              int tA = (a.value is Map && a.value['timestamp'] is int) ? a.value['timestamp'] : 0;
+              int tB = (b.value is Map && b.value['timestamp'] is int) ? b.value['timestamp'] : 0;
+              return tB.compareTo(tA);
+            });
+
+            if (sortedEntries.isNotEmpty) {
+              var lastMsgData = sortedEntries.first.value;
+              if (lastMsgData is Map && lastMsgData['senderId'] == senderId) {
+                String msgText = lastMsgData['message']?.toString() ?? 'New message received';
+                
+                String senderName = 'COMSATS Student';
+                DataSnapshot userSnap = await _dbRef.child('users').child(senderId).get();
+                if (userSnap.value != null && userSnap.value is Map) {
+                  var uData = userSnap.value as Map<dynamic, dynamic>;
+                  senderName = uData['name'] ?? uData['fullName'] ?? 'COMSATS Student';
+                }
+
+                tempNotifications.add({
+                  'senderId': senderId,
+                  'senderName': senderName,
+                  'lastMessage': msgText,
+                  'time': 'Recent',
+                });
+              }
+            }
+          }
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _unreadNotifications = tempNotifications;
+        });
+      }
+    });
+  }
+
   @override
   void dispose() {
+    _chatsSubscription?.cancel();
     _searchController.dispose();
     _searchFocusNode.dispose();
     _isNavCompact.dispose();
@@ -101,7 +170,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   LinearGradient _getCardGradient(int index) {
-    List<List<Color>> gradients = [
+    List gradients = [
       [const Color(0xFF0F2027), const Color(0xFF2C5364)],
       [const Color(0xFF11998E), const Color(0xFF38EF7D)],
       [const Color(0xFF8E2DE2), const Color(0xFF4A00E0)],
@@ -109,7 +178,7 @@ class _HomeScreenState extends State<HomeScreen> {
       [const Color(0xFFD31027), const Color(0xFFEA384D)],
       [const Color(0xFF1F1C2C), const Color(0xFF928DAB)],
     ];
-    List<Color> selected = gradients[index % gradients.length];
+    List<Color> selected = List<Color>.from(gradients[index % gradients.length]);
     return LinearGradient(
       colors: selected,
       begin: Alignment.topLeft,
@@ -131,6 +200,46 @@ class _HomeScreenState extends State<HomeScreen> {
     return 0.0;
   }
 
+  Widget _buildSellerNameWidget(String userId, String rawSellerName) {
+    bool isEmailOrUsername = rawSellerName.contains('@') || RegExp(r'^[a-zA-Z]{2}\d+').hasMatch(rawSellerName);
+
+    if (!isEmailOrUsername && rawSellerName.trim().isNotEmpty && rawSellerName != 'Unknown' && rawSellerName != 'COMSATS Student') {
+      return Text(
+        'Seller: $rawSellerName',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: 10, color: Colors.grey[600], fontWeight: FontWeight.w600),
+      );
+    }
+
+    if (_userNamesCache.containsKey(userId)) {
+      return Text(
+        'Seller: ${_userNamesCache[userId]}',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: 10, color: Colors.grey[600], fontWeight: FontWeight.w600),
+      );
+    }
+
+    return FutureBuilder<DataSnapshot>(
+      future: _dbRef.child('users').child(userId).get(),
+      builder: (context, snapshot) {
+        String displayName = 'COMSATS Student';
+        if (snapshot.hasData && snapshot.data?.value != null && snapshot.data!.value is Map) {
+          var uData = snapshot.data!.value as Map<dynamic, dynamic>;
+          displayName = uData['name'] ?? uData['fullName'] ?? 'COMSATS Student';
+          _userNamesCache[userId] = displayName;
+        }
+        return Text(
+          'Seller: $displayName',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 10, color: Colors.grey[600], fontWeight: FontWeight.w600),
+        );
+      },
+    );
+  }
+
   void _showNotificationBottomSheet() {
     showModalBottomSheet(
       context: context,
@@ -142,11 +251,11 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.92),
+              color: Colors.white.withValues(alpha: 0.92),
               borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
+                  color: Colors.black.withValues(alpha: 0.1),
                   blurRadius: 20,
                   offset: const Offset(0, -5),
                 ),
@@ -171,7 +280,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const Text(
-                      'Unseen Messages',
+                      'Unread Notifications',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -211,28 +320,33 @@ class _HomeScreenState extends State<HomeScreen> {
                     itemCount: _unreadNotifications.length,
                     separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.black12),
                     itemBuilder: (context, index) {
-                      var item = _unreadNotifications[index];
+                      final item = _unreadNotifications[index] as Map;
+                      String senderName = item['senderName']?.toString() ?? 'COMSATS Student';
+                      String lastMessage = item['lastMessage']?.toString() ?? '';
+                      String senderId = item['senderId']?.toString() ?? '';
+                      String timeStr = item['time']?.toString() ?? 'Recent';
+
                       return ListTile(
                         contentPadding: const EdgeInsets.symmetric(vertical: 4),
                         leading: CircleAvatar(
-                          backgroundColor: brandAccent.withOpacity(0.2),
+                          backgroundColor: brandAccent.withValues(alpha: 0.2),
                           child: Text(
-                            item['senderName']![0],
+                            senderName.isNotEmpty ? senderName[0].toUpperCase() : 'U',
                             style: const TextStyle(color: brandNavy, fontWeight: FontWeight.bold),
                           ),
                         ),
                         title: Text(
-                          item['senderName']!,
+                          senderName,
                           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: brandNavy),
                         ),
                         subtitle: Text(
-                          item['lastMessage']!,
+                          lastMessage,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 12, color: Colors.grey),
                         ),
                         trailing: Text(
-                          item['time']!,
+                          timeStr,
                           style: const TextStyle(fontSize: 10, color: brandAccent, fontWeight: FontWeight.w600),
                         ),
                         onTap: () {
@@ -244,8 +358,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             context,
                             MaterialPageRoute(
                               builder: (_) => ChatScreen(
-                                receiverId: item['senderId']!,
-                                receiverName: item['senderName']!,
+                                receiverId: senderId,
+                                receiverName: senderName,
                               ),
                             ),
                           );
@@ -282,7 +396,7 @@ class _HomeScreenState extends State<HomeScreen> {
             height: 220,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xFF0077B6).withOpacity(0.12),
+              color: const Color(0xFF0077B6).withValues(alpha: 0.12),
             ),
           ),
         ),
@@ -294,7 +408,7 @@ class _HomeScreenState extends State<HomeScreen> {
             height: 200,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xFF00B4D8).withOpacity(0.10),
+              color: const Color(0xFF00B4D8).withValues(alpha: 0.10),
             ),
           ),
         ),
@@ -330,7 +444,6 @@ class _HomeScreenState extends State<HomeScreen> {
           },
           child: Column(
             children: [
-              // ANIMATED COMPACT SEARCH BAR
               ValueListenableBuilder<bool>(
                 valueListenable: _isNavCompact,
                 builder: (context, isCompact, child) {
@@ -338,34 +451,38 @@ class _HomeScreenState extends State<HomeScreen> {
                     duration: const Duration(milliseconds: 200),
                     curve: Curves.easeInOut,
                     margin: EdgeInsets.fromLTRB(
-                      isCompact ? 40 : 16,
+                      isCompact ? 36 : 16,
                       12,
-                      isCompact ? 40 : 16,
+                      isCompact ? 36 : 16,
                       6,
                     ),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(30),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.08),
+                          blurRadius: 16,
+                          spreadRadius: 1,
+                          offset: const Offset(0, 5),
+                        ),
+                      ],
+                    ),
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(40),
+                      borderRadius: BorderRadius.circular(30),
                       child: BackdropFilter(
                         filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
                         child: Container(
                           padding: EdgeInsets.symmetric(
-                            horizontal: isCompact ? 6 : 8,
-                            vertical: isCompact ? 2 : 4,
+                            horizontal: isCompact ? 8 : 12,
+                            vertical: isCompact ? 4 : 6,
                           ),
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.30),
-                            borderRadius: BorderRadius.circular(40),
+                            color: Colors.white.withValues(alpha: 0.75),
+                            borderRadius: BorderRadius.circular(30),
                             border: Border.all(
-                              color: Colors.white.withOpacity(0.70),
+                              color: Colors.white.withValues(alpha: 0.85),
                               width: 1.5,
                             ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.04),
-                                blurRadius: 16,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
                           ),
                           child: Row(
                             children: [
@@ -375,8 +492,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                 },
                                 child: AnimatedContainer(
                                   duration: const Duration(milliseconds: 180),
-                                  width: isCompact ? 34 : 40,
-                                  height: isCompact ? 34 : 40,
+                                  width: isCompact ? 34 : 38,
+                                  height: isCompact ? 34 : 38,
                                   decoration: const BoxDecoration(
                                     color: brandAccent,
                                     shape: BoxShape.circle,
@@ -406,7 +523,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   decoration: InputDecoration(
                                     hintText: 'Search books, authors, courses...',
                                     hintStyle: TextStyle(
-                                      color: brandNavy.withOpacity(0.45),
+                                      color: brandNavy.withValues(alpha: 0.45),
                                       fontSize: 13,
                                       fontWeight: FontWeight.w500,
                                     ),
@@ -440,17 +557,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
               Expanded(
                 child: StreamBuilder(
-                  stream: _dbRef.onValue,
+                  stream: _dbRef.child('books').onValue,
                   builder: (context, AsyncSnapshot<DatabaseEvent> snapshot) {
                     if (snapshot.connectionState == ConnectionState.waiting) {
                       return const Center(child: CircularProgressIndicator(color: brandNavy));
                     }
 
-                    List<Map<String, dynamic>> filteredBooks = [];
+                    List filteredBooks = [];
 
                     if (snapshot.hasData && snapshot.data?.snapshot.value != null) {
                       Map<dynamic, dynamic> map = snapshot.data!.snapshot.value as Map<dynamic, dynamic>;
-                      List<Map<String, dynamic>> booksList = [];
+                      List booksList = [];
 
                       map.forEach((key, value) {
                         String sellerName = 'Unknown';
@@ -472,11 +589,13 @@ class _HomeScreenState extends State<HomeScreen> {
                           'userId': value['userId'] ?? '',
                           'sellerName': sellerName,
                           'bookCode': value['bookCode'] ?? key.toString().substring(0, key.toString().length > 5 ? 5 : key.toString().length).toUpperCase(),
+                          'isSold': value['isSold'] == true,
                           'createdAt': value['createdAt'] ?? 0,
                         });
                       });
 
                       filteredBooks = booksList.where((book) {
+                        bool isNotSold = book['isSold'] != true;
                         String title = book['title'].toString().toLowerCase();
                         String author = book['author'].toString().toLowerCase();
                         String dept = book['department'].toString();
@@ -487,7 +606,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             code.contains(_searchQuery);
                         bool matchesDept = _selectedDeptFilter == 'Filters' || _selectedDeptFilter == 'All' || dept == _selectedDeptFilter;
 
-                        return matchesSearch && matchesDept;
+                        return isNotSold && matchesSearch && matchesDept;
                       }).toList();
 
                       if (_selectedSortOption == 'Price: Low to High') {
@@ -548,7 +667,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                         style: TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w600,
-                                          color: brandAccent.withOpacity(0.85),
+                                          color: brandAccent.withValues(alpha: 0.85),
                                         ),
                                       ),
                                     ],
@@ -564,10 +683,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                           width: 44,
                                           height: 44,
                                           decoration: BoxDecoration(
-                                            color: Colors.white.withOpacity(0.40),
+                                            color: Colors.white.withValues(alpha: 0.40),
                                             borderRadius: BorderRadius.circular(16),
                                             border: Border.all(
-                                              color: Colors.white.withOpacity(0.70),
+                                              color: Colors.white.withValues(alpha: 0.70),
                                               width: 1.2,
                                             ),
                                           ),
@@ -625,9 +744,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                   child: Container(
                                     padding: const EdgeInsets.all(10),
                                     decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.35),
+                                      color: Colors.white.withValues(alpha: 0.35),
                                       borderRadius: BorderRadius.circular(20),
-                                      border: Border.all(color: Colors.white.withOpacity(0.65), width: 1.2),
+                                      border: Border.all(color: Colors.white.withValues(alpha: 0.65), width: 1.2),
                                     ),
                                     child: Row(
                                       children: [
@@ -635,7 +754,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           child: Container(
                                             height: 36,
                                             decoration: BoxDecoration(
-                                              color: Colors.white.withOpacity(0.50),
+                                              color: Colors.white.withValues(alpha: 0.50),
                                               borderRadius: BorderRadius.circular(12),
                                             ),
                                             child: PopupMenuButton<String>(
@@ -695,7 +814,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           child: Container(
                                             height: 36,
                                             decoration: BoxDecoration(
-                                              color: Colors.white.withOpacity(0.50),
+                                              color: Colors.white.withValues(alpha: 0.50),
                                               borderRadius: BorderRadius.circular(12),
                                             ),
                                             child: PopupMenuButton<String>(
@@ -782,7 +901,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                                 delegate: SliverChildBuilderDelegate(
                                   (context, index) {
-                                    var book = filteredBooks[index];
+                                    final book = filteredBooks[index] as Map;
                                     bool isMyBook = book['userId'] == _auth.currentUser?.uid;
 
                                     return InkWell(
@@ -791,7 +910,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           context,
                                           MaterialPageRoute(
                                             builder: (_) => BookDetailScreen(
-                                              book: book,
+                                              book: Map<String, dynamic>.from(book),
                                               cardGradient: _getCardGradient(index),
                                             ),
                                           ),
@@ -804,7 +923,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           borderRadius: BorderRadius.circular(22),
                                           boxShadow: [
                                             BoxShadow(
-                                              color: Colors.black.withOpacity(0.05),
+                                              color: Colors.black.withValues(alpha: 0.05),
                                               blurRadius: 12,
                                               offset: const Offset(0, 6),
                                             ),
@@ -831,7 +950,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                             Container(
                                                               padding: const EdgeInsets.all(12),
                                                               decoration: BoxDecoration(
-                                                                color: Colors.white.withOpacity(0.25),
+                                                                color: Colors.white.withValues(alpha: 0.25),
                                                                 shape: BoxShape.circle,
                                                               ),
                                                               child: const Icon(
@@ -844,7 +963,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                             Padding(
                                                               padding: const EdgeInsets.symmetric(horizontal: 6.0),
                                                               child: Text(
-                                                                book['department'],
+                                                                book['department']?.toString() ?? 'General',
                                                                 maxLines: 1,
                                                                 overflow: TextOverflow.ellipsis,
                                                                 style: const TextStyle(
@@ -864,7 +983,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                       child: Container(
                                                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                                         decoration: BoxDecoration(
-                                                          color: Colors.black.withOpacity(0.7),
+                                                          color: Colors.black.withValues(alpha: 0.7),
                                                           borderRadius: BorderRadius.circular(10),
                                                         ),
                                                         child: Text(
@@ -881,11 +1000,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                                       child: Container(
                                                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                                         decoration: BoxDecoration(
-                                                          color: Colors.white.withOpacity(0.95),
+                                                          color: Colors.white.withValues(alpha: 0.95),
                                                           borderRadius: BorderRadius.circular(6),
                                                         ),
                                                         child: Text(
-                                                          '#${book['bookCode']}',
+                                                          '#${book['bookCode'] ?? 'BOOK'}',
                                                           style: const TextStyle(color: brandNavy, fontWeight: FontWeight.bold, fontSize: 9),
                                                         ),
                                                       ),
@@ -905,24 +1024,22 @@ class _HomeScreenState extends State<HomeScreen> {
                                                         crossAxisAlignment: CrossAxisAlignment.start,
                                                         children: [
                                                           Text(
-                                                            book['title'],
+                                                            book['title']?.toString() ?? 'Untitled',
                                                             maxLines: 1,
                                                             overflow: TextOverflow.ellipsis,
                                                             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: brandNavy),
                                                           ),
                                                           const SizedBox(height: 2),
                                                           Text(
-                                                            'Author: ${book['author']}',
+                                                            'Author: ${book['author'] ?? 'Unknown'}',
                                                             maxLines: 1,
                                                             overflow: TextOverflow.ellipsis,
                                                             style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Colors.grey[700]),
                                                           ),
                                                           const SizedBox(height: 2),
-                                                          Text(
-                                                            'Seller: ${book['sellerName']}',
-                                                            maxLines: 1,
-                                                            overflow: TextOverflow.ellipsis,
-                                                            style: TextStyle(fontSize: 10, color: Colors.grey[600], fontWeight: FontWeight.w600),
+                                                          _buildSellerNameWidget(
+                                                            book['userId']?.toString() ?? '',
+                                                            book['sellerName']?.toString() ?? '',
                                                           ),
                                                         ],
                                                       ),
@@ -932,7 +1049,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                               height: 32,
                                                               alignment: Alignment.center,
                                                               decoration: BoxDecoration(
-                                                                color: Colors.amber.withOpacity(0.2),
+                                                                color: Colors.amber.withValues(alpha: 0.2),
                                                                 borderRadius: BorderRadius.circular(10),
                                                               ),
                                                               child: const Text('Your Listing', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 10)),
@@ -947,16 +1064,32 @@ class _HomeScreenState extends State<HomeScreen> {
                                                                   ),
                                                                 ),
                                                                 InkWell(
-                                                                  onTap: () {
-                                                                    Navigator.push(
-                                                                      context,
-                                                                      MaterialPageRoute(
-                                                                        builder: (_) => ChatScreen(
-                                                                          receiverId: book['userId'],
-                                                                          receiverName: book['sellerName'],
+                                                                  onTap: () async {
+                                                                    String receiverId = book['userId']?.toString() ?? '';
+                                                                    String sellerName = book['sellerName']?.toString() ?? '';
+
+                                                                    // Dynamic name resolver from Firebase node
+                                                                    if (sellerName.isEmpty || sellerName == 'COMSATS Student' || sellerName.contains('@') || sellerName == 'Unknown') {
+                                                                      try {
+                                                                        DataSnapshot snap = await FirebaseDatabase.instance.ref().child('users').child(receiverId).get();
+                                                                        if (snap.exists && snap.value is Map) {
+                                                                          var uData = snap.value as Map<dynamic, dynamic>;
+                                                                          sellerName = uData['name'] ?? uData['fullName'] ?? sellerName;
+                                                                        }
+                                                                      } catch (_) {}
+                                                                    }
+
+                                                                    if (context.mounted) {
+                                                                      Navigator.push(
+                                                                        context,
+                                                                        MaterialPageRoute(
+                                                                          builder: (_) => ChatScreen(
+                                                                            receiverId: receiverId,
+                                                                            receiverName: sellerName,
+                                                                          ),
                                                                         ),
-                                                                      ),
-                                                                    );
+                                                                      );
+                                                                    }
                                                                   },
                                                                   borderRadius: BorderRadius.circular(20),
                                                                   child: Container(
@@ -969,7 +1102,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                                       shape: BoxShape.circle,
                                                                       boxShadow: [
                                                                         BoxShadow(
-                                                                          color: brandAccent.withOpacity(0.3),
+                                                                          color: brandAccent.withValues(alpha: 0.3),
                                                                           blurRadius: 6,
                                                                           offset: const Offset(0, 2),
                                                                         ),
@@ -1009,7 +1142,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    List<Widget> widgetOptions = <Widget>[
+    List widgetOptions = [
       _buildBooksFeed(),
       const ChatsListScreen(),
       const AddBookScreen(),
@@ -1021,7 +1154,7 @@ class _HomeScreenState extends State<HomeScreen> {
       extendBody: true,
       body: SafeArea(
         bottom: false,
-        child: widgetOptions[_selectedIndex],
+        child: widgetOptions[_selectedIndex] as Widget,
       ),
       bottomNavigationBar: ValueListenableBuilder<bool>(
         valueListenable: _isNavCompact,
@@ -1039,7 +1172,7 @@ class _HomeScreenState extends State<HomeScreen> {
               borderRadius: BorderRadius.circular(40),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.06),
+                  color: Colors.black.withValues(alpha: 0.06),
                   blurRadius: 18,
                   offset: const Offset(0, 6),
                 ),
@@ -1055,76 +1188,96 @@ class _HomeScreenState extends State<HomeScreen> {
                     horizontal: isCompact ? 8 : 6,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.30),
+                    color: Colors.white.withValues(alpha: 0.30),
                     borderRadius: BorderRadius.circular(40),
                     border: Border.all(
-                      color: Colors.white.withOpacity(0.70),
+                      color: Colors.white.withValues(alpha: 0.70),
                       width: 1.5,
                     ),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: [
-                      _buildNavItem(0, Icons.grid_view_outlined, Icons.grid_view_rounded, 'Books', isCompact),
-                      _buildNavItem(1, Icons.forum_outlined, Icons.forum_rounded, 'Chats', isCompact),
-                      _buildNavItem(2, Icons.add_circle_outline_rounded, Icons.add_circle_rounded, 'Sell/Share', isCompact),
-                      _buildNavItem(3, Icons.smart_toy_outlined, Icons.smart_toy_rounded, 'AI Helper', isCompact),
-                      _buildNavItem(4, Icons.account_circle_outlined, Icons.account_circle_rounded, 'Profile', isCompact),
-                    ],
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final double itemWidth = constraints.maxWidth / _navItems.length;
+                      final double circleSize = isCompact ? 38.0 : 42.0;
+
+                      return Stack(
+                        alignment: Alignment.centerLeft,
+                        children: [
+                          AnimatedPositioned(
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeInOutCubic,
+                            left: (_selectedIndex * itemWidth) + (itemWidth - circleSize) / 2,
+                            top: isCompact ? 0 : 2,
+                            child: Container(
+                              width: circleSize,
+                              height: circleSize,
+                              decoration: BoxDecoration(
+                                color: brandAccent,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: brandAccent.withValues(alpha: 0.4),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+
+                          Row(
+                            children: List.generate(_navItems.length, (index) {
+                              bool isSelected = _selectedIndex == index;
+                              var navItem = _navItems[index] as Map;
+                              IconData currentIcon = (isSelected ? navItem['activeIcon'] : navItem['icon']) as IconData;
+                              String currentLabel = navItem['label'].toString();
+
+                              return SizedBox(
+                                width: itemWidth,
+                                child: GestureDetector(
+                                  onTap: () => _onItemTapped(index),
+                                  behavior: HitTestBehavior.opaque,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      SizedBox(
+                                        width: circleSize,
+                                        height: circleSize,
+                                        child: Center(
+                                          child: Icon(
+                                            currentIcon,
+                                            color: isSelected ? Colors.white : brandNavy.withValues(alpha: 0.85),
+                                            size: isSelected ? (isCompact ? 20 : 22) : (isCompact ? 18 : 20),
+                                          ),
+                                        ),
+                                      ),
+                                      if (!isCompact) ...[
+                                        const SizedBox(height: 2),
+                                        AnimatedDefaultTextStyle(
+                                          duration: const Duration(milliseconds: 200),
+                                          style: TextStyle(
+                                            color: isSelected ? brandAccent : brandNavy.withValues(alpha: 0.85),
+                                            fontSize: 10,
+                                            fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                                          ),
+                                          child: Text(currentLabel),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
               ),
             ),
           );
         },
-      ),
-    );
-  }
-
-  Widget _buildNavItem(int index, IconData icon, IconData activeIcon, String label, bool isCompact) {
-    bool isSelected = _selectedIndex == index;
-
-    return GestureDetector(
-      onTap: () => _onItemTapped(index),
-      behavior: HitTestBehavior.opaque,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            width: isSelected ? (isCompact ? 38 : 42) : (isCompact ? 32 : 36),
-            height: isSelected ? (isCompact ? 38 : 42) : (isCompact ? 32 : 36),
-            decoration: BoxDecoration(
-              color: isSelected ? brandAccent : Colors.transparent,
-              shape: BoxShape.circle,
-              boxShadow: isSelected
-                  ? [
-                      BoxShadow(
-                        color: brandAccent.withOpacity(0.35),
-                        blurRadius: 8,
-                        offset: const Offset(0, 3),
-                      ),
-                    ]
-                  : [],
-            ),
-            child: Icon(
-              isSelected ? activeIcon : icon,
-              color: isSelected ? Colors.white : brandNavy.withOpacity(0.85),
-              size: isSelected ? (isCompact ? 20 : 22) : (isCompact ? 18 : 20),
-            ),
-          ),
-          if (!isCompact) ...[
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? brandAccent : brandNavy.withOpacity(0.85),
-                fontSize: 10,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-              ),
-            ),
-          ],
-        ],
       ),
     );
   }

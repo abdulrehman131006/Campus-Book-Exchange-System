@@ -15,8 +15,60 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
   final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
 
   static const Color brandNavy = Color(0xFF0B192C);
-  static const Color brandBlue = Color(0xFF1E3E62);
   static const Color brandAccent = Color(0xFF0077B6);
+
+  Future<String> _fetchUserName(String userId) async {
+    try {
+      DataSnapshot userSnap = await _dbRef.child('users').child(userId).get();
+      if (userSnap.exists && userSnap.value is Map) {
+        Map userData = userSnap.value as Map;
+        String name = userData['name'] ?? userData['fullName'] ?? '';
+        if (name.isNotEmpty) return name;
+      }
+    } catch (_) {}
+    return 'COMSATS Student';
+  }
+
+  void _confirmDeleteChat(String chatRoomId, String otherUserName) {
+    showDialog(
+      context: context,
+      builder: (BuildContext ctx) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.delete_forever_rounded, color: Colors.red),
+              SizedBox(width: 8),
+              Text('Delete Chat', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Text('Are you sure you want to delete the entire chat with $otherUserName?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                await _dbRef.child('chats').child(chatRoomId).remove();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Chat with $otherUserName deleted successfully.')),
+                  );
+                }
+              },
+              child: const Text('Delete', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -25,7 +77,6 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     return Scaffold(
       body: Stack(
         children: [
-          // Background Decor
           Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(
@@ -43,7 +94,7 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
               height: 180,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: brandAccent.withOpacity(0.18),
+                color: brandAccent.withValues(alpha: 0.18),
               ),
             ),
           ),
@@ -68,25 +119,31 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
                 );
               }
 
-              Map<dynamic, dynamic> map = snapshot.data!.snapshot.value as Map<dynamic, dynamic>;
-              List<Map<String, String>> myChats = [];
+              List myChats = [];
+              Set<String> processedUsers = {};
 
-              map.forEach((chatRoomId, value) {
-                if (chatRoomId.toString().contains(currentUserId)) {
-                  List<String> parts = chatRoomId.toString().split('_');
-                  String otherUserId = parts.firstWhere(
-                    (id) => id != currentUserId,
-                    orElse: () => '',
-                  );
+              if (snapshot.data!.snapshot.value is Map) {
+                Map<dynamic, dynamic> map = snapshot.data!.snapshot.value as Map<dynamic, dynamic>;
 
-                  if (otherUserId.isNotEmpty) {
-                    myChats.add({
-                      'chatRoomId': chatRoomId.toString(),
-                      'otherUserId': otherUserId,
-                    });
+                map.forEach((chatRoomId, value) {
+                  String roomStr = chatRoomId.toString();
+                  if (roomStr.contains(currentUserId)) {
+                    List<String> parts = roomStr.split('_');
+                    String otherUserId = parts.firstWhere(
+                      (id) => id != currentUserId,
+                      orElse: () => '',
+                    );
+
+                    if (otherUserId.isNotEmpty && !processedUsers.contains(otherUserId)) {
+                      processedUsers.add(otherUserId);
+                      myChats.add({
+                        'chatRoomId': roomStr,
+                        'otherUserId': otherUserId,
+                      });
+                    }
                   }
-                }
-              });
+                });
+              }
 
               if (myChats.isEmpty) {
                 return Center(
@@ -105,31 +162,30 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
                 padding: const EdgeInsets.all(14),
                 itemCount: myChats.length,
                 itemBuilder: (context, index) {
-                  String otherUserId = myChats[index]['otherUserId']!;
+                  final chatItem = myChats[index] as Map;
+                  String chatRoomId = chatItem['chatRoomId'].toString();
+                  String otherUserId = chatItem['otherUserId'].toString();
 
-                  return FutureBuilder(
-                    future: _dbRef.child('users').child(otherUserId).get(),
-                    builder: (context, AsyncSnapshot<DataSnapshot> userSnapshot) {
-                      String name = 'COMSATS Student';
-                      if (userSnapshot.hasData && userSnapshot.data?.value != null) {
-                        Map<dynamic, dynamic> userData = userSnapshot.data!.value as Map<dynamic, dynamic>;
-                        name = userData['name'] ?? 'COMSATS Student';
-                      }
+                  return FutureBuilder<String>(
+                    future: _fetchUserName(otherUserId),
+                    builder: (context, userSnapshot) {
+                      String name = userSnapshot.data ?? 'COMSATS Student';
 
                       return Container(
                         margin: const EdgeInsets.only(bottom: 10),
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.9),
+                          color: Colors.white.withValues(alpha: 0.9),
                           borderRadius: BorderRadius.circular(18),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.05),
+                              color: Colors.black.withValues(alpha: 0.05),
                               blurRadius: 10,
                               offset: const Offset(0, 4),
                             ),
                           ],
                         ),
                         child: ListTile(
+                          onLongPress: () => _confirmDeleteChat(chatRoomId, name),
                           leading: CircleAvatar(
                             backgroundColor: brandNavy,
                             child: Text(
@@ -141,8 +197,18 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
                             name,
                             style: const TextStyle(fontWeight: FontWeight.bold, color: brandNavy),
                           ),
-                          subtitle: const Text('Tap to open conversation'),
-                          trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: brandAccent),
+                          subtitle: const Text('Tap to open • Press & hold to delete'),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 22),
+                                onPressed: () => _confirmDeleteChat(chatRoomId, name),
+                                tooltip: 'Delete Chat',
+                              ),
+                              const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: brandAccent),
+                            ],
+                          ),
                           onTap: () {
                             Navigator.push(
                               context,

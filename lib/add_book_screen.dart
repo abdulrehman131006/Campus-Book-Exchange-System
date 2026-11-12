@@ -74,7 +74,28 @@ class _AddBookScreenState extends State<AddBookScreen> {
     try {
       User? user = FirebaseAuth.instance.currentUser;
       String userId = user?.uid ?? 'guest';
-      String sellerName = user?.email?.split('@')[0] ?? 'Student';
+
+      // Realtime Database 'users' node se real user name fetch karein
+      String sellerName = 'COMSATS Student';
+      if (user != null) {
+        DataSnapshot userSnap = await FirebaseDatabase.instance.ref().child('users').child(user.uid).get();
+        if (userSnap.exists && userSnap.value is Map) {
+          var userData = userSnap.value as Map<dynamic, dynamic>;
+          if (userData['name'] != null && userData['name'].toString().trim().isNotEmpty) {
+            sellerName = userData['name'].toString().trim();
+          } else if (userData['fullName'] != null && userData['fullName'].toString().trim().isNotEmpty) {
+            sellerName = userData['fullName'].toString().trim();
+          } else if (user.displayName != null && user.displayName!.trim().isNotEmpty) {
+            sellerName = user.displayName!.trim();
+          } else if (user.email != null && user.email!.contains('@')) {
+            sellerName = user.email!.split('@')[0];
+          }
+        } else if (user.displayName != null && user.displayName!.trim().isNotEmpty) {
+          sellerName = user.displayName!.trim();
+        } else if (user.email != null && user.email!.contains('@')) {
+          sellerName = user.email!.split('@')[0];
+        }
+      }
 
       DatabaseReference newBookRef = FirebaseDatabase.instance.ref().child('books').push();
       String bookId = newBookRef.key ?? '';
@@ -89,6 +110,7 @@ class _AddBookScreenState extends State<AddBookScreen> {
         'userId': userId,
         'sellerName': sellerName,
         'bookCode': bookId.substring(0, bookId.length > 5 ? 5 : bookId.length).toUpperCase(),
+        'isSold': false,
         'createdAt': ServerValue.timestamp,
       });
 

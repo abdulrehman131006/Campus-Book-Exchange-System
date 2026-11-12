@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'login_screen.dart';
+import 'book_detail_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -19,6 +20,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
   final TextEditingController _phoneController = TextEditingController();
   String _selectedDept = 'Computer Science';
   bool _isSaving = false;
+  bool _isDeletingAccount = false;
 
   static const Color brandNavy = Color(0xFF0B192C);
   static const Color brandBlue = Color(0xFF1E3E62);
@@ -42,6 +44,23 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     'Architecture & Design',
     'Other / General',
   ];
+
+  LinearGradient _getCardGradient(int index) {
+    List gradients = [
+      [const Color(0xFF0F2027), const Color(0xFF2C5364)],
+      [const Color(0xFF11998E), const Color(0xFF38EF7D)],
+      [const Color(0xFF8E2DE2), const Color(0xFF4A00E0)],
+      [const Color(0xFFF2994A), const Color(0xFFF2C94C)],
+      [const Color(0xFFD31027), const Color(0xFFEA384D)],
+      [const Color(0xFF1F1C2C), const Color(0xFF928DAB)],
+    ];
+    List<Color> selected = List<Color>.from(gradients[index % gradients.length]);
+    return LinearGradient(
+      colors: selected,
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+    );
+  }
 
   @override
   void initState() {
@@ -139,7 +158,121 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
     }
   }
 
-  // FAQ Modal Dialog
+  Future<void> _toggleSoldStatus(String bookId, bool currentSoldState) async {
+    try {
+      await _dbRef.child('books').child(bookId).update({
+        'isSold': !currentSoldState,
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(!currentSoldState ? 'Book marked as SOLD OUT!' : 'Book marked as AVAILABLE!')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update status: ${e.toString()}')),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteUserAccount() async {
+    User? user = _auth.currentUser;
+    if (user == null) return;
+
+    setState(() => _isDeletingAccount = true);
+
+    try {
+      String uid = user.uid;
+
+      // 1. User ki saari listed books Realtime Database se delete karein
+      DataSnapshot booksSnap = await _dbRef.child('books').get();
+      if (booksSnap.exists && booksSnap.value is Map) {
+        Map<dynamic, dynamic> booksMap = booksSnap.value as Map<dynamic, dynamic>;
+        booksMap.forEach((key, value) async {
+          if (value is Map && value['userId'] == uid) {
+            await _dbRef.child('books').child(key.toString()).remove();
+          }
+        });
+      }
+
+      // 2. User profile details delete karein
+      await _dbRef.child('users').child(uid).remove();
+
+      // 3. Firebase Auth se account delete karein
+      await user.delete();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Account permanently deleted.')),
+        );
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+          (route) => false,
+        );
+      }
+    } on FirebaseAuthException catch (e) {
+      if (mounted) {
+        if (e.code == 'requires-recent-login') {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Please log out and log in again before deleting your account.')),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.message ?? 'Failed to delete account')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error deleting account: ${e.toString()}')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isDeletingAccount = false);
+    }
+  }
+
+  void _showDeleteAccountConfirmation() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.red),
+            SizedBox(width: 8),
+            Text('Delete Account', style: TextStyle(fontWeight: FontWeight.bold, color: brandNavy, fontSize: 16)),
+          ],
+        ),
+        content: const Text(
+          'Are you sure you want to delete your account permanently?\n\nAll your listed books, user profile, and active data will be deleted completely. You will need to register again to access the app.',
+          style: TextStyle(fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _deleteUserAccount();
+            },
+            child: const Text('Delete Permanently', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showFAQsDialog() {
     showModalBottomSheet(
       context: context,
@@ -199,8 +332,8 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                           answer: 'Click on any book card to open its detail view, then tap the "Chat with Seller" button to start a direct real-time chat with them.',
                         ),
                         _FaqItem(
-                          question: '4. How can I edit or delete my book listing?',
-                          answer: 'Go to your Profile tab, open "My Books", and you will see edit and delete icons right next to your listed items.',
+                          question: '4. How can I mark my book as Sold?',
+                          answer: 'Tap on any of your listed books in "My Books", click "Mark as Sold", and it will be hidden from the main feed while staying in your history.',
                         ),
                         _FaqItem(
                           question: '5. What should I do if I forget my password?',
@@ -369,7 +502,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
         }
 
         Map<dynamic, dynamic> map = snapshot.data!.snapshot.value as Map<dynamic, dynamic>;
-        List<Map<String, dynamic>> myBooks = [];
+        List myBooks = [];
 
         map.forEach((key, value) {
           if (value['userId'] == currentUserId) {
@@ -380,6 +513,10 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
               'department': value['department'] ?? 'General',
               'price': value['price'] ?? 'Free',
               'description': value['description'] ?? '',
+              'userId': value['userId'] ?? '',
+              'sellerName': value['sellerName'] ?? 'Me',
+              'bookCode': value['bookCode'] ?? key.toString().substring(0, key.toString().length > 5 ? 5 : key.toString().length).toUpperCase(),
+              'isSold': value['isSold'] == true,
             });
           }
         });
@@ -401,7 +538,8 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
           padding: const EdgeInsets.all(14),
           itemCount: myBooks.length,
           itemBuilder: (context, index) {
-            var book = myBooks[index];
+            var book = myBooks[index] as Map<String, dynamic>;
+            bool isSold = book['isSold'] == true;
 
             return Container(
               margin: const EdgeInsets.only(bottom: 12),
@@ -418,20 +556,59 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
               ),
               child: ListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => BookDetailScreen(
+                        book: Map<String, dynamic>.from(book),
+                        cardGradient: _getCardGradient(index),
+                      ),
+                    ),
+                  );
+                },
                 leading: Container(
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: brandNavy.withValues(alpha: 0.1),
+                    color: isSold ? Colors.red.withValues(alpha: 0.15) : brandNavy.withValues(alpha: 0.1),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.book_rounded, color: brandNavy),
+                  child: Icon(
+                    isSold ? Icons.check_circle_rounded : Icons.book_rounded,
+                    color: isSold ? Colors.redAccent : brandNavy,
+                  ),
                 ),
                 title: Text(
                   book['title'],
                   style: const TextStyle(fontWeight: FontWeight.bold, color: brandNavy, fontSize: 15),
                 ),
-                subtitle: Text('Author: ${book['author']} • PKR ${book['price']}', style: const TextStyle(color: Colors.black54)),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Author: ${book['author']} • PKR ${book['price']}', style: const TextStyle(color: Colors.black54)),
+                    const SizedBox(height: 4),
+                    GestureDetector(
+                      onTap: () => _toggleSoldStatus(book['id'], isSold),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: isSold ? Colors.red.shade100 : Colors.green.shade100,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: isSold ? Colors.red : Colors.green, width: 1),
+                        ),
+                        child: Text(
+                          isSold ? 'SOLD OUT (Tap to mark available)' : 'AVAILABLE (Tap to mark sold)',
+                          style: TextStyle(
+                            color: isSold ? Colors.red.shade800 : Colors.green.shade800,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -595,12 +772,12 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                   leading: const Icon(Icons.help_outline_rounded, color: brandAccent),
                   title: const Text('Help & Support', style: TextStyle(color: brandNavy)),
                   subtitle: const Text('Frequently Asked Questions (FAQs)', style: TextStyle(color: Colors.black54)),
-                  onTap: _showFAQsDialog, // Click karte hi FAQs popup open hoga
+                  onTap: _showFAQsDialog,
                 ),
                 const Divider(),
                 ListTile(
-                  leading: const Icon(Icons.logout_rounded, color: Colors.red),
-                  title: const Text('Logout Account', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                  leading: const Icon(Icons.logout_rounded, color: Colors.amber),
+                  title: const Text('Logout Account', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
                   onTap: () async {
                     await _auth.signOut();
                     if (mounted) {
@@ -611,6 +788,15 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
                       );
                     }
                   },
+                ),
+                const Divider(),
+                ListTile(
+                  leading: _isDeletingAccount
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.red, strokeWidth: 2))
+                      : const Icon(Icons.delete_forever_rounded, color: Colors.red),
+                  title: const Text('Delete Account', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                  subtitle: const Text('Permanently remove user data & listings', style: TextStyle(color: Colors.grey, fontSize: 11)),
+                  onTap: _isDeletingAccount ? null : _showDeleteAccountConfirmation,
                 ),
               ],
             ),
@@ -724,7 +910,6 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
   }
 }
 
-// Helper widget for FAQ List items
 class _FaqItem extends StatelessWidget {
   final String question;
   final String answer;
